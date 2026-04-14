@@ -1,7 +1,7 @@
 import json
 from typing import Dict, List
 from json import JSONEncoder
-import jsonpickle
+import jsonpickle 
 
 Time = int
 Symbol = str
@@ -21,7 +21,7 @@ class Listing:
                  
 class ConversionObservation:
 
-    def __init__(self, bidPrice: float, askPrice: float, transportFees: float, exportTariff: float, importTariff: float, sunlight: float, humidity: float):
+    def __init__(self, bidPrice: float, askPrice: float, transportFees: float, exportTariff: float, importTariff: float, sunlightIndex: float, sugarPrice: float):
         self.bidPrice = bidPrice
         self.askPrice = askPrice
         self.transportFees = transportFees
