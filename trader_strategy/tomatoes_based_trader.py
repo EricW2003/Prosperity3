@@ -7,7 +7,7 @@ class Trader:
 
         result = {}
 
-        for product in ["EMERALDS"]:
+        for product in ["TOMATOES"]:
 
             order_depth: OrderDepth = state.order_depths[product]
             orders: List[Order] = []
