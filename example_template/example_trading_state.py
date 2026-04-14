@@ -1,4 +1,4 @@
-from Prosperity3.datamodel import Listing, OrderDepth, Trade, TradingState
+from datamodel import Listing, OrderDepth, Trade, TradingState
 
 timestamp = 1000
 
