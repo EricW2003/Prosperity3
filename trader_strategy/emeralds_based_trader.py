@@ -1,6 +1,5 @@
 from datamodel import OrderDepth, TradingState, Order
 from typing import List
-
 class Trader:
 
     def run(self, state: TradingState):
@@ -18,8 +17,8 @@ class Trader:
             best_bid = max(order_depth.buy_orders.keys())
             best_ask = min(order_depth.sell_orders.keys())
 
-            buy_price = best_bid
-            sell_price = best_ask
+            buy_price = best_bid+1
+            sell_price = best_ask-1
 
             buy_volume = limit - position
             sell_volume = limit + position
