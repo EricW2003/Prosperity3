@@ -9,7 +9,6 @@ dependencies:
   - matplotlib
   - jupyter
   - pip
+  - jsonpickle
   - pip:
-    - jsonpickle
     - prosperity4btest
-    - Prosperity3
