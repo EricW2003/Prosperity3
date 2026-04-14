@@ -1,4 +1,4 @@
-from Prosperity3.datamodel import OrderDepth, TradingState, Order
+from datamodel import OrderDepth, TradingState, Order
 from typing import List
 
 class Trader:

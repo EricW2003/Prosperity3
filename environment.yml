@@ -1,0 +1,15 @@
+name: prosperity3
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy
+  - pandas
+  - matplotlib
+  - jupyter
+  - pip
+  - pip:
+    - jsonpickle
+    - prosperity4btest
+    - Prosperity3
