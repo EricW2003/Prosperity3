@@ -12,3 +12,6 @@ dependencies:
   - jsonpickle
   - pip:
     - prosperity4btest
+    - streamlit
+    - plotly
+    - watchdog
