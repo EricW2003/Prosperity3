@@ -30,7 +30,8 @@ import streamlit as st
 # In your CONFIG section or at the start of main()
 PLOTLY_CONFIG = {
     'displayModeBar': True,
-    'responsive': True
+    'responsive': True,
+    'scrollZoom': True,
 }
 
 # Filesystem roots (relative to the directory where you run streamlit)
@@ -383,6 +384,8 @@ def build_orderbook_figure(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(20,20,30,1)",
     )
+    fig.update_xaxes(fixedrange=False)
+    fig.update_yaxes(fixedrange=False)
     return fig
 
 
@@ -409,9 +412,12 @@ def build_pnl_figure(pnl_df: pd.DataFrame, xaxis_range: list | None = None) -> g
         yaxis_title="PnL",
         margin=dict(l=60, r=20, t=10, b=30),
         showlegend=False,
+        dragmode="zoom",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(20,20,30,1)",
     )
+    fig.update_xaxes(fixedrange=False)
+    fig.update_yaxes(fixedrange=False)
     if xaxis_range:
         fig.update_xaxes(range=xaxis_range)
     return fig
@@ -436,9 +442,12 @@ def build_spread_figure(spread_df: pd.DataFrame, xaxis_range: list | None = None
         yaxis_title="Spread",
         margin=dict(l=60, r=20, t=10, b=30),
         showlegend=False,
+        dragmode="zoom",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(20,20,30,1)",
     )
+    fig.update_xaxes(fixedrange=False)
+    fig.update_yaxes(fixedrange=False)
     if xaxis_range:
         fig.update_xaxes(range=xaxis_range)
     return fig
