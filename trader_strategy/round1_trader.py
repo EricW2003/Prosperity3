@@ -6,22 +6,22 @@ import numpy as np
 class Trader:
 
     def __init__(self):
-        self.price_history = {"TOMATOES": []}
+        self.price_history = {"INTARIAN_PEPPER_ROOT": []}
 
     def run(self, state: TradingState):
 
         result = {}
 
-        result["EMERALDS"] = self.trade_emeralds(state)
-        result["TOMATOES"] = self.trade_tomatoes(state)
+        result["ASH_COATED_OSMIUM"] = self.trade_osmium(state)
+        result["INTARIAN_PEPPER_ROOT"] = self.trade_pepper(state)
 
         return result, 0, ""
 
     # ---------------- EMERALDS ----------------
 
-    def trade_emeralds(self, state):
+    def trade_osmium(self, state):
 
-        product = "EMERALDS"
+        product = "ASH_COATED_OSMIUM"
         orders = []
 
         order_depth = state.order_depths[product]
@@ -47,9 +47,9 @@ class Trader:
 
     # ---------------- TOMATOES ----------------
 
-    def trade_tomatoes(self, state):
+    def trade_pepper(self, state):
 
-        product = "TOMATOES"
+        product = "INTARIAN_PEPPER_ROOT"
         orders = []
 
         order_depth = state.order_depths[product]
@@ -57,9 +57,7 @@ class Trader:
         position = state.position.get(product, 0)
         limit = 20
 
-        best_bid, best_ask = self.get_best_bid_ask(order_depth)
-
-        mid = (best_bid + best_ask) / 2
+        mid = self.get_mid_price(order_depth)
 
         self.update_price_history(product, mid)
 
@@ -88,8 +86,8 @@ class Trader:
 
     def get_best_bid_ask(self, order_depth):
 
-        best_bid = max(order_depth.buy_orders.keys())
-        best_ask = min(order_depth.sell_orders.keys())
+        best_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders.keys() is not None else None
+        best_ask = min(order_depth.sell_orders.keys()) if order_depth.buy_orders.keys() is not None else None
 
         return best_bid, best_ask
     
@@ -160,3 +158,5 @@ class Trader:
     def inventory_skew(self, position, limit):
 
         return position / limit
+
+
