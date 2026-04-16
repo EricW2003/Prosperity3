@@ -31,6 +31,9 @@ class Trader:
 
         best_bid, best_ask = self.get_best_bid_ask(order_depth)
 
+        if best_bid is None or best_ask is None:
+            return []
+
         buy_price = best_bid + 1
         sell_price = best_ask - 1
 
@@ -57,8 +60,10 @@ class Trader:
         position = state.position.get(product, 0)
         limit = 20
 
-        mid = self.get_mid_price(order_depth)
+        mid = self.get_mid_price(product, order_depth)
 
+        if mid is None:
+            return []
         self.update_price_history(product, mid)
 
         drift = self.compute_drift(product, mid)
@@ -86,16 +91,32 @@ class Trader:
 
     def get_best_bid_ask(self, order_depth):
 
-        best_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders.keys() is not None else None
-        best_ask = min(order_depth.sell_orders.keys()) if order_depth.buy_orders.keys() is not None else None
+        best_bid = max(order_depth.buy_orders.keys()) if len(order_depth.buy_orders) > 0 else None
+        best_ask = min(order_depth.sell_orders.keys()) if len(order_depth.sell_orders) > 0 else None
 
         return best_bid, best_ask
     
-    def get_mid_price(self, order_depth):
+    def get_mid_price(self, product, order_depth):
 
         best_bid, best_ask = self.get_best_bid_ask(order_depth)
 
-        return (best_bid + best_ask) / 2
+        if best_bid is not None and best_ask is not None:
+            mid = (best_bid + best_ask) / 2
+
+        elif best_bid is not None:
+            mid = best_bid
+
+        elif best_ask is not None:
+            mid = best_ask
+
+        else:
+            history = self.price_history[product]
+            if len(history) > 0:
+                return history[-1]
+            return None
+
+        self.update_price_history(product, mid)
+        return mid
     
     def get_spread(self, order_depth):
 
