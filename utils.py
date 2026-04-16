@@ -1,5 +1,6 @@
 import os
 import sys
+import pandas as pd
 
 def clear_backtests_logs(backtests_dir: str = "backtests"):
     """
@@ -27,6 +28,10 @@ def clear_backtests_logs(backtests_dir: str = "backtests"):
             print(f"Erreur lors de la suppression de {log_file}: {e}")
 
     print(f"Nettoyage terminé. {len(log_files)} fichiers supprimés.")
+
+def calculate_autocorrelation(price_series: pd.Series, lag: int) -> float:
+    returns = price_series.pct_change()
+    return returns.autocorr(lag=lag)
 
 if __name__ == "__main__":
     # Si un argument est fourni, l'utiliser comme nom de dossier

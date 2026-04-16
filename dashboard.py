@@ -22,6 +22,9 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from utils import calculate_autocorrelation
 
 
 
@@ -70,12 +73,13 @@ TRADES_COLS: dict = {
 DAY_OFFSET_MULTIPLIER = 1_000_100
 
 # Visual constants
-BID_COLOR    = "#4C8EDA"
-ASK_COLOR    = "#E05A5A"
-MID_COLOR    = "#888888"
-PNL_COLOR    = "#56C786"
-SPREAD_COLOR = "#F5A623"
-TRADE_COLOR  = "#FFD700"
+BID_COLOR       = "#4C8EDA"
+ASK_COLOR       = "#E05A5A"
+MID_COLOR       = "#888888"
+CLEAN_MID_COLOR = "#B06EE0"
+PNL_COLOR       = "#56C786"
+SPREAD_COLOR    = "#F5A623"
+TRADE_COLOR     = "#FFD700"
 
 MARKER_BASE_SIZE  = 6     # px, minimum dot size
 VOLUME_SCALE      = 0.35  # additional px per unit of volume
@@ -159,6 +163,15 @@ def load_prices(paths: tuple[Path, ...]) -> pd.DataFrame:
         # mid_price == 0 means the exchange had an empty book that tick; treat as NaN
         mid_col = PRICES_COLS["mid_price"]
         df.loc[df[mid_col] == 0, mid_col] = float("nan")
+        # clean_mid: two-sided mid only, forward-filled within this day
+        bp1 = PRICES_COLS["bid_price"][0]
+        ap1 = PRICES_COLS["ask_price"][0]
+        if bp1 in df.columns and ap1 in df.columns:
+            df["clean_mid"] = (df[bp1] + df[ap1]) / 2
+            prod_col = PRICES_COLS["product"]
+            df["clean_mid"] = df.groupby(prod_col)["clean_mid"].ffill()
+        else:
+            df["clean_mid"] = float("nan")
         frames.append(df)
 
     if not frames:
@@ -294,6 +307,7 @@ def build_orderbook_figure(
     show_bids: bool,
     show_asks: bool,
     show_trades: bool,
+    show_clean_mid: bool,
     size_by_volume: bool,
     normalize: bool,
 ) -> go.Figure:
@@ -312,6 +326,18 @@ def build_orderbook_figure(
             name="Mid price",
             line=dict(color=MID_COLOR, width=1, dash="dot"),
             hovertemplate="<b>Mid</b>: %{y:.2f}<br>t=%{x}<extra></extra>",
+        ))
+
+    # Clean mid line
+    if show_clean_mid and not prices_df.empty and "clean_mid" in prices_df.columns:
+        cm = prices_df[["effective_ts", "clean_mid"]].dropna()
+        fig.add_trace(go.Scatter(
+            x=cm["effective_ts"],
+            y=cm["clean_mid"],
+            mode="lines",
+            name="Clean mid",
+            line=dict(color=CLEAN_MID_COLOR, width=1, dash="dash"),
+            hovertemplate="<b>Clean mid</b>: %{y:.2f}<br>t=%{x}<extra></extra>",
         ))
 
     # Bid levels
@@ -582,18 +608,26 @@ def main() -> None:
 
     # ── Remaining sidebar controls
     st.sidebar.header("Display")
-    show_mid     = st.sidebar.checkbox("Mid price",       value=True)
-    show_bids    = st.sidebar.checkbox("Bid levels",      value=True)
-    show_asks    = st.sidebar.checkbox("Ask levels",      value=True)
-    show_trades  = st.sidebar.checkbox("Trades",          value=True)
-    show_spread  = st.sidebar.checkbox("Spread panel",    value=False)
-    size_by_vol  = st.sidebar.checkbox("Size by volume",  value=True)
+    show_mid       = st.sidebar.checkbox("Mid price",       value=True)
+    show_clean_mid = st.sidebar.checkbox("Clean mid",       value=False)
+    show_bids      = st.sidebar.checkbox("Bid levels",      value=True)
+    show_asks      = st.sidebar.checkbox("Ask levels",      value=True)
+    show_trades    = st.sidebar.checkbox("Trades",          value=True)
+    show_spread    = st.sidebar.checkbox("Spread panel",    value=False)
+    size_by_vol    = st.sidebar.checkbox("Size by volume",  value=True)
 
-    st.sidebar.header("Normalization")
+    st.sidebar.header("Normalization & Stats")
     normalize = st.sidebar.checkbox(
         "Normalize prices",
         value=False,
-        help="Subtract mid-price from all price levels to show deviations around zero.",
+        help="Subtract reference price from all price levels to show deviations around zero.",
+    )
+    ref_col = st.sidebar.radio(
+        "Reference price",
+        options=["mid_price", "clean_mid"],
+        format_func=lambda x: "Mid price" if x == "mid_price" else "Clean mid (two-sided, ffilled)",
+        index=1,
+        help="Used for normalization and stats calculations.",
     )
 
     st.sidebar.header("Performance")
@@ -618,13 +652,36 @@ def main() -> None:
 
     # ── Normalization
     if normalize:
-        ref = prices.set_index("effective_ts")[PRICES_COLS["mid_price"]]
+        ref = prices.set_index("effective_ts")[ref_series_col]
         bid_df, ask_df, trades = apply_normalization(bid_df, ask_df, trades, ref)
 
     # ── Title row
     day_str = ", ".join(selected_days)
     st.title(f"📈 {product}")
     st.caption(f"Round: **{selected_round}** | Days: **{day_str}** | Rows: **{len(prices):,}**")
+
+    # ── Stats box
+    ref_series_col = PRICES_COLS["mid_price"] if ref_col == "mid_price" else "clean_mid"
+    mid_series = prices[ref_series_col].dropna()
+    ac1  = calculate_autocorrelation(mid_series, 1)
+    ac2  = calculate_autocorrelation(mid_series, 2)
+    ac5  = calculate_autocorrelation(mid_series, 5)
+
+    spread_df_stats = compute_spread(prices)
+    mean_spread = spread_df_stats["spread"].mean() if not spread_df_stats.empty else float("nan")
+
+    returns = mid_series.pct_change().dropna()
+    vol = returns.std() * 100  # as percentage
+    mean = mid_series.dropna().mean()
+
+    with st.container(border=True):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("AC(1)",        f"{ac1:.4f}"  if not np.isnan(ac1)         else "N/A")
+        c2.metric("AC(2)",        f"{ac2:.4f}"  if not np.isnan(ac2)         else "N/A")
+        c3.metric("Mean spread",  f"{mean_spread:.2f}" if not np.isnan(mean_spread) else "N/A")
+        c4.metric("Return vol",   f"{vol:.4f}%" if not np.isnan(vol)         else "N/A")
+        c5.metric("Mean",   f"{mean:.4f}%" if not np.isnan(mean)         else "N/A")
+
 
     # ── Order book chart
     xaxis_range = st.session_state.get("xaxis_range")
@@ -634,6 +691,7 @@ def main() -> None:
         show_bids=show_bids,
         show_asks=show_asks,
         show_trades=show_trades,
+        show_clean_mid=show_clean_mid,
         size_by_volume=size_by_vol,
         normalize=normalize,
     )
