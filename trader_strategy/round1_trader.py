@@ -1,41 +1,77 @@
-from datamodel import OrderDepth, TradingState, Order
+from datamodel import OrderDepth, UserId, TradingState, Order
 from typing import List
-import numpy as np
-
+import json
+import math
 
 class Trader:
 
-    def __init__(self):
-        self.price_history = {"INTARIAN_PEPPER_ROOT": []}
-
+    def bid(self):
+        return 15
+    
     def run(self, state: TradingState):
 
         result = {}
+        orders: List[Order] = []
 
-        result["ASH_COATED_OSMIUM"] = self.trade_osmium(state)
-        result["INTARIAN_PEPPER_ROOT"] = self.trade_pepper(state)
-
-        return result, 0, ""
-
-    # ---------------- EMERALDS ----------------
-
-    def trade_osmium(self, state):
-
-        product = "ASH_COATED_OSMIUM"
-        orders = []
-
-        order_depth = state.order_depths[product]
+        product="ASH_COATED_OSMIUM"
+        limit = 80
+        delta = 20
 
         position = state.position.get(product, 0)
-        limit = 80
 
-        best_bid, best_ask = self.get_best_bid_ask(order_depth)
+        order_depth: OrderDepth = state.order_depths[product]
+        if not order_depth:
+            return {}, 0, ""
 
-        if best_bid is None or best_ask is None:
-            return []
+        # Dynamic fair: midpoint of largest-volume ("wall") levels on each side
+        wall_threshold = 5
+        bid_walls = [p for p, v in order_depth.buy_orders.items() if v >= wall_threshold]
+        ask_walls = [p for p, v in order_depth.sell_orders.items() if -v >= wall_threshold]
+        if bid_walls and ask_walls:
+            fair_value = (max(bid_walls) + min(ask_walls)) / 2
+        else:
+            fair_value = 10000
 
-        buy_price = best_bid + 1
-        sell_price = best_ask - 1
+        #Market taking
+
+        # Buy everything below fair value
+        for ask_price, ask_qty in sorted(order_depth.sell_orders.items()):  # ascending
+            if ask_price < fair_value:
+                buy_qty = min(-ask_qty, limit - position)  # ask_qty is negative
+                if buy_qty > 0:
+                    orders.append(Order(product, ask_price, buy_qty))
+                    position += buy_qty
+            else:
+                break  # asks are sorted ascending, no point continuing
+
+        # Sell everything above fair value
+        for bid_price, bid_qty in sorted(order_depth.buy_orders.items(), reverse=True):  # descending
+            if bid_price > fair_value:
+                sell_qty = min(bid_qty, limit + position)  # bid_qty is positive
+                if sell_qty > 0:
+                    orders.append(Order(product, bid_price, -sell_qty))
+                    position -= sell_qty
+            else:
+                break
+
+        #Market making — always join the inside of the book, skewed by inventory
+        best_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders else None
+        best_ask = min(order_depth.sell_orders.keys()) if order_depth.sell_orders else None
+
+        skew = int(round(position / 9))  # ±2 at full position (±80)
+
+        bid_cap = math.floor(fair_value) - 1 - skew   # never quote >= floor(fair)
+        ask_cap = math.ceil(fair_value) + 1 - skew    # never quote <= ceil(fair)
+
+        if best_bid is not None:
+            buy_price = min(best_bid + 1, bid_cap)
+        else:
+            buy_price = int(fair_value - delta) - skew
+
+        if best_ask is not None:
+            sell_price = max(best_ask - 1, ask_cap)
+        else:
+            sell_price = int(fair_value + delta) - skew
 
         buy_volume = limit - position
         sell_volume = limit + position
@@ -46,138 +82,77 @@ class Trader:
         if sell_volume > 0:
             orders.append(Order(product, sell_price, -sell_volume))
 
-        return orders
-
-    # ---------------- TOMATOES ----------------
-
-    def trade_pepper(self, state):
-
+        result[product] = orders
+        
         product = "INTARIAN_PEPPER_ROOT"
-        orders = []
+        limit = 80
 
-        order_depth = state.order_depths[product]
+        # Tunable parameters (env vars for sweep_param.py)
+        ALPHA = 3.25
+        HALF_SPREAD = 7.0
+        SKEW_FACTOR = 0.03
 
         position = state.position.get(product, 0)
-        limit = 20
+        order_depth = state.order_depths.get(product)
+        if not order_depth:
+            return {}, 0, ""
 
-        mid = self.get_mid_price(product, order_depth)
+        orders: List[Order] = []
 
-        if mid is None:
-            return []
-        self.update_price_history(product, mid)
+        # ── Wall-mid: midpoint of best wall levels on each side ──
+        wall_threshold = 5
+        bid_walls = [p for p, v in order_depth.buy_orders.items()
+                     if v >= wall_threshold]
+        ask_walls = [p for p, v in order_depth.sell_orders.items()
+                     if -v >= wall_threshold]
 
-        drift = self.compute_drift(product, mid)
-
-        fair = mid + 0.5 * drift
-
-        levels = [(4, 10), (5, 5)]
-
-        for offset, volume in levels:
-
-            bid_price = int(fair - offset)
-            ask_price = int(fair + offset)
-
-            if position < limit:
-                buy_volume = min(volume, limit - position)
-                orders.append(Order(product, bid_price, buy_volume))
-
-            if position > -limit:
-                sell_volume = min(volume, limit + position)
-                orders.append(Order(product, ask_price, -sell_volume))
-
-        return orders
-
-    # ---------------- UTILITIES ----------------
-
-    def get_best_bid_ask(self, order_depth):
-
-        best_bid = max(order_depth.buy_orders.keys()) if len(order_depth.buy_orders) > 0 else None
-        best_ask = min(order_depth.sell_orders.keys()) if len(order_depth.sell_orders) > 0 else None
-
-        return best_bid, best_ask
-    
-    def get_mid_price(self, product, order_depth):
-
-        best_bid, best_ask = self.get_best_bid_ask(order_depth)
-
-        if best_bid is not None and best_ask is not None:
-            mid = (best_bid + best_ask) / 2
-
-        elif best_bid is not None:
-            mid = best_bid
-
-        elif best_ask is not None:
-            mid = best_ask
-
+        if bid_walls and ask_walls:
+            wall_mid = (max(bid_walls) + min(ask_walls)) / 2
+            self.mids.append(wall_mid)
+            if len(self.mids) > 100:
+                self.mids.pop(0)
+        elif self.mids:
+            wall_mid = self.mids[-1]
         else:
-            history = self.price_history[product]
-            if len(history) > 0:
-                return history[-1]
-            return None
+            return {product: []}, 0, ""
 
-        self.update_price_history(product, mid)
-        return mid
-    
-    def get_spread(self, order_depth):
+        # ── Fair value: wall_mid shifted up for positive drift ──
+        fair_value = wall_mid + ALPHA
 
-        best_bid, best_ask = self.get_best_bid_ask(order_depth)
+        # ── Market taking: grab mispriced orders ──
+        for ask_price in sorted(order_depth.sell_orders.keys()):
+            if ask_price < fair_value and position < limit:
+                ask_qty = -order_depth.sell_orders[ask_price]
+                buy_qty = min(ask_qty, limit - position)
+                if buy_qty > 0:
+                    orders.append(Order(product, ask_price, buy_qty))
+                    position += buy_qty
+            else:
+                break
 
-        return best_ask - best_bid
+        for bid_price in sorted(order_depth.buy_orders.keys(), reverse=True):
+            if bid_price > fair_value and position > -limit:
+                bid_qty = order_depth.buy_orders[bid_price]
+                sell_qty = min(bid_qty, limit + position)
+                if sell_qty > 0:
+                    orders.append(Order(product, bid_price, -sell_qty))
+                    position -= sell_qty
+            else:
+                break
 
-    def update_price_history(self, product, price):
+        # ── Inventory skew: positive position → lower both prices ──
+        skew = position * SKEW_FACTOR
 
-        self.price_history[product].append(price)
+        # ── Market making: passive quotes around fair value ──
+        buy_price = math.floor(fair_value - HALF_SPREAD - skew)
+        sell_price = math.ceil(fair_value + HALF_SPREAD - skew)
 
-        if len(self.price_history[product]) > 20:
-            self.price_history[product].pop(0)
+        buy_volume = limit - position
+        sell_volume = limit + position
 
-    def compute_drift(self, product, mid):
+        if buy_volume > 0:
+            orders.append(Order(product, buy_price, buy_volume))
+        if sell_volume > 0:
+            orders.append(Order(product, sell_price, -sell_volume))
 
-        history = self.price_history[product]
-
-        if len(history) > 5:
-            return mid - np.mean(history[-5:])
-
-        return 0
-
-    def detect_wall(self, order_dict):
-
-        for price, volume in order_dict.items():
-
-            if abs(volume) > 15:
-                return price
-
-        return None
-    
-    def moving_average(self, product, window):
-
-        history = self.price_history[product]
-
-        if len(history) < window:
-            return history[-1]
-
-        return np.mean(history[-window:])
-    
-    def compute_volatility(self, product):
-
-        history = self.price_history[product]
-
-        if len(history) < 5:
-            return 0
-
-        return np.std(history[-10:])
-    
-    def place_order(self, orders, product, price, volume):
-
-        orders.append(Order(product, int(price), int(volume)))
-
-    def place_market_making(self, orders, product, fair, offset, volume):
-
-        orders.append(Order(product, fair - offset, volume))
-        orders.append(Order(product, fair + offset, -volume))
-    
-    def inventory_skew(self, position, limit):
-
-        return position / limit
-
-
+        return result, 0, ""
