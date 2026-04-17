@@ -1,6 +1,8 @@
 from datamodel import TradingState, Order
 from typing import List
+import json
 import math
+import os
 
 
 class Trader:
@@ -15,9 +17,6 @@ class Trader:
       5. Inventory skew: position * SKEW_FACTOR pushes quotes down when long
     """
 
-    def __init__(self):
-        self.mids = []
-
     def run(self, state: TradingState):
         product = "INTARIAN_PEPPER_ROOT"
         limit = 80
@@ -27,10 +26,13 @@ class Trader:
         HALF_SPREAD = float(os.environ.get("HALF_SPREAD", "7"))
         SKEW_FACTOR = float(os.environ.get("SKEW_FACTOR", "0.03"))
 
+        # Restore mids history from traderData
+        mids = json.loads(state.traderData) if state.traderData else []
+
         position = state.position.get(product, 0)
         order_depth = state.order_depths.get(product)
         if not order_depth:
-            return {}, 0, ""
+            return {}, 0, json.dumps(mids)
 
         orders: List[Order] = []
 
@@ -43,13 +45,13 @@ class Trader:
 
         if bid_walls and ask_walls:
             wall_mid = (max(bid_walls) + min(ask_walls)) / 2
-            self.mids.append(wall_mid)
-            if len(self.mids) > 100:
-                self.mids.pop(0)
-        elif self.mids:
-            wall_mid = self.mids[-1]
+            mids.append(wall_mid)
+            if len(mids) > 100:
+                mids.pop(0)
+        elif mids:
+            wall_mid = mids[-1]
         else:
-            return {product: []}, 0, ""
+            return {product: []}, 0, json.dumps(mids)
 
         # â”€â”€ Fair value: wall_mid shifted up for positive drift â”€â”€
         fair_value = wall_mid + ALPHA

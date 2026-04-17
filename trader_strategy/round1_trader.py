@@ -89,13 +89,16 @@ class Trader:
 
         # Tunable parameters (env vars for sweep_param.py)
         ALPHA = 3.25
-        HALF_SPREAD = 7.0
+        HALF_SPREAD = 7
         SKEW_FACTOR = 0.03
+
+        # Restore mids history from traderData
+        mids = json.loads(state.traderData) if state.traderData else []
 
         position = state.position.get(product, 0)
         order_depth = state.order_depths.get(product)
         if not order_depth:
-            return {}, 0, ""
+            return {}, 0, json.dumps(mids)
 
         orders: List[Order] = []
 
@@ -108,13 +111,13 @@ class Trader:
 
         if bid_walls and ask_walls:
             wall_mid = (max(bid_walls) + min(ask_walls)) / 2
-            self.mids.append(wall_mid)
-            if len(self.mids) > 100:
-                self.mids.pop(0)
-        elif self.mids:
-            wall_mid = self.mids[-1]
+            mids.append(wall_mid)
+            if len(mids) > 100:
+                mids.pop(0)
+        elif mids:
+            wall_mid = mids[-1]
         else:
-            return {product: []}, 0, ""
+            return {product: []}, 0, json.dumps(mids)
 
         # ── Fair value: wall_mid shifted up for positive drift ──
         fair_value = wall_mid + ALPHA
@@ -155,4 +158,6 @@ class Trader:
         if sell_volume > 0:
             orders.append(Order(product, sell_price, -sell_volume))
 
-        return result, 0, ""
+        result[product] = orders
+
+        return result, 0, json.dumps(mids)
