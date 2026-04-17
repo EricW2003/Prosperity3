@@ -15,6 +15,8 @@ To adapt to a different dataset format, change the CONFIG section below.
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import re
 from pathlib import Path
@@ -38,8 +40,12 @@ PLOTLY_CONFIG = {
 }
 
 # Filesystem roots (relative to the directory where you run streamlit)
-PRICES_ROOT = "prices"
-TRADES_ROOT = "trades"
+PRICES_ROOT    = "prices"
+TRADES_ROOT    = "trades"
+BACKTEST_DIR   = "backtests"
+
+# Backtester uses 1_000_000 per-day offset; dashboard uses DAY_OFFSET_MULTIPLIER
+BACKTEST_DAY_OFFSET = 1_000_000
 
 # Delimiters
 PRICES_SEP = ";"
@@ -80,6 +86,8 @@ CLEAN_MID_COLOR = "#B06EE0"
 PNL_COLOR       = "#56C786"
 SPREAD_COLOR    = "#F5A623"
 TRADE_COLOR     = "#FFD700"
+OWN_BUY_COLOR   = "#00E676"   # green  — our buys
+OWN_SELL_COLOR  = "#FF6B6B"   # red    — our sells
 
 MARKER_BASE_SIZE  = 6     # px, minimum dot size
 VOLUME_SCALE      = 0.35  # additional px per unit of volume
@@ -127,6 +135,68 @@ def discover_trade_files(round_name: str) -> dict[str, Path]:
     return _discover_csv_files(Path(TRADES_ROOT) / round_name)
 
 
+def discover_backtest_logs() -> dict[str, Path]:
+    """Return {filename_stem: path} for all .log files in BACKTEST_DIR, newest first."""
+    p = Path(BACKTEST_DIR)
+    if not p.exists():
+        return {}
+    logs = sorted(p.glob("*.log"), reverse=True)
+    return {f.stem: f for f in logs}
+
+
+def load_backtest_log(path: Path) -> pd.DataFrame:
+    """
+    Parse a prosperity4btest .log file and return a DataFrame of SUBMISSION
+    trades with an ``effective_ts`` column aligned to the dashboard's scale.
+
+    The backtester sequences days with a 1_000_000 offset; we remap to
+    DAY_OFFSET_MULTIPLIER (1_000_100) so trades align with loaded price data.
+    """
+    with open(path) as f:
+        content = f.read()
+
+    # ── Parse activities section to discover which days the log covers
+    act_start = content.index("Activities log:\n") + len("Activities log:\n")
+    act_end   = content.index("\nTrade History:")
+    act_df    = pd.read_csv(io.StringIO(content[act_start:act_end]), sep=";",
+                            usecols=["day", "timestamp"])
+    days_sorted = sorted(act_df["day"].unique())
+    # Backtester offset table (1_000_000 per day, same ordering as dashboard)
+    min_day     = min(days_sorted)
+    log_offset  = {d: i * BACKTEST_DAY_OFFSET            for i, d in enumerate(days_sorted)}
+    dash_offset = {d: (d - min_day) * DAY_OFFSET_MULTIPLIER for d in days_sorted}
+
+    # ── Parse Trade History JSON (has trailing commas — strip them)
+    th_start = content.index("Trade History:\n") + len("Trade History:\n")
+    th_raw   = re.sub(r",\s*([}\]])", r"\1", content[th_start:].strip())
+    raw      = json.loads(th_raw)
+
+    if not raw:
+        return pd.DataFrame()
+
+    trades_df = pd.DataFrame(raw)
+
+    # Determine each trade's day from its log timestamp, then remap to effective_ts
+    def _to_effective(ts: int) -> int:
+        day_idx = ts // BACKTEST_DAY_OFFSET
+        day_idx = min(day_idx, len(days_sorted) - 1)
+        day     = days_sorted[day_idx]
+        raw_ts  = ts - log_offset[day]
+        return raw_ts + dash_offset[day]
+
+    trades_df["effective_ts"] = trades_df["timestamp"].map(_to_effective)
+
+    # Keep only our own fills
+    own = trades_df[
+        (trades_df["buyer"] == "SUBMISSION") | (trades_df["seller"] == "SUBMISSION")
+    ].copy()
+    own["side"] = own.apply(
+        lambda r: "buy" if r["buyer"] == "SUBMISSION" else "sell", axis=1
+    )
+    own.rename(columns={"symbol": TRADES_COLS["symbol"]}, inplace=True)
+    return own
+
+
 # ── SECTION 3: DATA LOADING & PROCESSING ──────────────────────────────────────
 
 def _day_offset_table(paths: tuple[Path, ...]) -> dict[int, int]:
@@ -140,8 +210,10 @@ def _day_offset_table(paths: tuple[Path, ...]) -> dict[int, int]:
         m = DAY_PATTERN.search(p.name)
         if m:
             days.append(int(m.group(1)))
-    days_sorted = sorted(days)
-    return {d: i * DAY_OFFSET_MULTIPLIER for i, d in enumerate(days_sorted)}
+    if not days:
+        return {}
+    min_day = min(days)
+    return {d: (d - min_day) * DAY_OFFSET_MULTIPLIER for d in days}
 
 
 @st.cache_data(ttl=300)
@@ -303,11 +375,13 @@ def build_orderbook_figure(
     ask_df: pd.DataFrame,
     prices_df: pd.DataFrame,
     trades_df: pd.DataFrame,
+    own_trades_df: pd.DataFrame,
     show_mid: bool,
     show_bids: bool,
     show_asks: bool,
     show_trades: bool,
     show_clean_mid: bool,
+    show_own_trades: bool,
     size_by_volume: bool,
     normalize: bool,
 ) -> go.Figure:
@@ -396,6 +470,31 @@ def build_orderbook_figure(
                     "<b>Trade</b>: %{y:.2f}<br>"
                     "Qty: %{customdata[0]:.0f}<br>"
                     f"{label}<br>%{{customdata[1]}}<extra></extra>"
+                ),
+            ))
+
+    # Own (SUBMISSION) trades from backtest log
+    if show_own_trades and not own_trades_df.empty:
+        price_col = TRADES_COLS["price"]
+        qty_col   = TRADES_COLS["quantity"]
+        for side, color, symbol in [
+            ("buy",  OWN_BUY_COLOR,  "triangle-up"),
+            ("sell", OWN_SELL_COLOR, "triangle-down"),
+        ]:
+            grp = own_trades_df[own_trades_df["side"] == side]
+            if grp.empty:
+                continue
+            fig.add_trace(go.Scattergl(
+                x=grp["effective_ts"],
+                y=grp[price_col],
+                mode="markers",
+                name=f"My {side}s",
+                marker=dict(color=color, size=10, symbol=symbol,
+                            line=dict(width=1, color="white")),
+                customdata=grp[qty_col].values,
+                hovertemplate=(
+                    f"<b>My {side}</b>: %{{y}}<br>"
+                    "Qty: %{customdata}<extra></extra>"
                 ),
             ))
 
@@ -611,10 +710,17 @@ def main() -> None:
     show_mid       = st.sidebar.checkbox("Mid price",       value=True)
     show_clean_mid = st.sidebar.checkbox("Clean mid",       value=False)
     show_bids      = st.sidebar.checkbox("Bid levels",      value=True)
-    show_asks      = st.sidebar.checkbox("Ask levels",      value=True)
-    show_trades    = st.sidebar.checkbox("Trades",          value=True)
-    show_spread    = st.sidebar.checkbox("Spread panel",    value=False)
-    size_by_vol    = st.sidebar.checkbox("Size by volume",  value=True)
+    show_asks       = st.sidebar.checkbox("Ask levels",      value=True)
+    show_trades     = st.sidebar.checkbox("Trades",          value=True)
+    show_spread     = st.sidebar.checkbox("Spread panel",    value=False)
+    size_by_vol     = st.sidebar.checkbox("Size by volume",  value=True)
+
+    st.sidebar.header("Backtest overlay")
+    backtest_logs = discover_backtest_logs()
+    selected_log  = st.sidebar.selectbox(
+        "Log file", options=["(none)"] + list(backtest_logs.keys())
+    )
+    show_own_trades = st.sidebar.checkbox("Show my trades", value=True)
 
     st.sidebar.header("Normalization & Stats")
     normalize = st.sidebar.checkbox(
@@ -636,9 +742,16 @@ def main() -> None:
         help="Show every Nth row only — reduces plot lag on large datasets.",
     )
 
+    # ── Load backtest log (if selected)
+    own_trades_all = pd.DataFrame()
+    if selected_log != "(none)" and selected_log in backtest_logs:
+        with st.spinner("Loading backtest log…"):
+            own_trades_all = load_backtest_log(backtest_logs[selected_log])
+
     # ── Filter by product
     prices = filter_product(prices_raw, product)
     trades = filter_product(trades_raw, product, col=TRADES_COLS["symbol"]) if not trades_raw.empty else pd.DataFrame()
+    own_trades = filter_product(own_trades_all, product, col=TRADES_COLS["symbol"]) if not own_trades_all.empty else pd.DataFrame()
 
     # ── Optional downsampling (per unique timestamp to preserve structure)
     if downsample_n > 1:
@@ -654,6 +767,10 @@ def main() -> None:
     if normalize:
         ref = prices.set_index("effective_ts")[ref_series_col]
         bid_df, ask_df, trades = apply_normalization(bid_df, ask_df, trades, ref)
+        if not own_trades.empty:
+            _, _, own_trades = apply_normalization(
+                pd.DataFrame(), pd.DataFrame(), own_trades, ref
+            )
 
     # ── Title row
     day_str = ", ".join(selected_days)
@@ -687,11 +804,13 @@ def main() -> None:
     xaxis_range = st.session_state.get("xaxis_range")
     fig_main = build_orderbook_figure(
         bid_df, ask_df, prices, trades,
+        own_trades_df=own_trades,
         show_mid=show_mid,
         show_bids=show_bids,
         show_asks=show_asks,
         show_trades=show_trades,
         show_clean_mid=show_clean_mid,
+        show_own_trades=show_own_trades,
         size_by_volume=size_by_vol,
         normalize=normalize,
     )
