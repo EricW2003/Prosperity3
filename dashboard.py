@@ -781,7 +781,7 @@ def main() -> None:
     ref_series_col = PRICES_COLS["mid_price"] if ref_col == "mid_price" else "clean_mid"
     mid_series = prices[ref_series_col].dropna()
     ac1  = calculate_autocorrelation(mid_series, 1)
-    ac2  = calculate_autocorrelation(mid_series, 2)
+    ac2  = calculate_autocorrelation(mid_series, 15000)
     ac5  = calculate_autocorrelation(mid_series, 5)
 
     spread_df_stats = compute_spread(prices)
