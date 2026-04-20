@@ -136,7 +136,7 @@ def trade_intarian_pepper_root(orders: List[Order],
 class Trader:
 
     def bid(self):
-        return 15
+        return 15000
     
     def run(self, state: TradingState):
 
